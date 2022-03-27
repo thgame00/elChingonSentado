@@ -4,7 +4,6 @@
  * -> reed switches below all glasses to check which glasses are still there
  * -> LEDs below all glasses to only light up the glasses that are still in the game
  * -> different light modes depending on switch status and glass patterns
- * https://flagcolor.com/mexico-flag-colors/
  * 
  *    Glass/Switch pattern:
  *          0
@@ -20,7 +19,7 @@
  * Avoid connecting on a live circuit...if you must, connect GND first.
  *************************************************************************************************************
  *
- * Pull Up resistors for all input pins? TX, RX & D8 doesn't work as expected - D0 worked with PullUp
+ * Pull Up resistors for all input pins! -> Needed with port expander MCP23017
  *
  *************************************************************************************************************/
 
