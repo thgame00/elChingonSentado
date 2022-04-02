@@ -23,7 +23,9 @@
  *
  *************************************************************************************************************/
 
-#include <Adafruit_NeoPixel.h>
+#include <Adafruit_NeoPixel.h>  // for controlling the LEDs
+#include <MCP23017.h>           // for controlling MCP23017
+#include <Wire.h>               // for controlling I2C bus
 
 // pin definition
 #define LEDData     2   // data output for LEDs (D4 Output on D1 Mini from AzDelivery)
@@ -39,10 +41,12 @@
 #define reedGlass10 15  // reed below glass 10  (D8 Output on D1 Mini from AzDelivery)
 
 // definition of constants
-#define NUMLEDS     10    // number of LEDs that are controlled
-#define NUMREEDS    10    // number of reeds
-#define BRIGHTNESS  50    // set brightness of LEDs
-#define WAITTIME    500   // refresh rate for checking the glass status in ms
+#define MCP_ADDR_LEFT   0x20  // I2C address of MCP that controls the left side of the board
+#define MCP_ADDR_RIGHT  0x21  // I2C address of MCP that controls the right side of the board
+#define NUMLEDS         10    // number of LEDs that are controlled
+#define NUMREEDS        10    // number of reeds
+#define BRIGHTNESS      50    // set brightness of LEDs
+#define WAITTIME        500   // refresh rate for checking the glass status in ms
 // state machine constants
 #define INIT        0     // wait until all glasses are positioned
 #define LIGHTING    1     // 
