@@ -8,7 +8,7 @@
  *    Glass/Switch pattern:
  *          0
  *        1  2
- *       3  4  5 
+ *       5  4  3 
  *     6  7  8  9
  *************************************************************************************************************
  * IMPORTANT: 
@@ -24,12 +24,17 @@
  *************************************************************************************************************/
 
 #include <Adafruit_NeoPixel.h>  // for controlling the LEDs
-#include <MCP23017.h>           // for controlling MCP23017
+#include <MCP23017.h>        // for controlling MCP23017
 #include <Wire.h>               // for controlling I2C bus
+#include "glasses.h"
 
 // pin definition
-#define LEDData     2   // data output for LEDs (D4 Output on D1 Mini from AzDelivery)
-#define reedGlass1  1   // reed below glass 1   (TX Output on D1 Mini from AzDelivery)
+#define LEDDataLeft     5   // data output for LEDs on left side of board   (D1 Output on D1 Mini from AzDelivery)
+#define LEDDataRight    4   // data output for LEDs on right side of board  (D2 Output on D1 Mini from AzDelivery)
+#define INTERRUPT_LEFT  14  // interrupt pin for left MCP (D5 Output on D1 Mini from AzDelivery)
+#define INTERRUPT_RIGHT 12  // interrupt pin for right MCP (D6 Output on D1 Mini from AzDelivery)
+
+/*#define reedGlass1  1   // reed below glass 1   (TX Output on D1 Mini from AzDelivery)
 #define reedGlass2  3   // reed below glass 2   (RX Output on D1 Mini from AzDelivery)
 #define reedGlass3  5   // reed below glass 3   (D1 Output on D1 Mini from AzDelivery)
 #define reedGlass4  4   // reed below glass 4   (D2 Output on D1 Mini from AzDelivery)
@@ -38,13 +43,12 @@
 #define reedGlass7  14  // reed below glass 7   (D5 Output on D1 Mini from AzDelivery)
 #define reedGlass8  12  // reed below glass 8   (D6 Output on D1 Mini from AzDelivery)
 #define reedGlass9  13  // reed below glass 9   (D7 Output on D1 Mini from AzDelivery)
-#define reedGlass10 15  // reed below glass 10  (D8 Output on D1 Mini from AzDelivery)
+#define reedGlass10 15  // reed below glass 10  (D8 Output on D1 Mini from AzDelivery)*/
 
 // definition of constants
 #define MCP_ADDR_LEFT   0x20  // I2C address of MCP that controls the left side of the board
 #define MCP_ADDR_RIGHT  0x21  // I2C address of MCP that controls the right side of the board
-#define NUMLEDS         10    // number of LEDs that are controlled
-#define NUMREEDS        10    // number of reeds
+#define NUMGLASSES      10    // number of glasses on the board
 #define BRIGHTNESS      50    // set brightness of LEDs
 #define WAITTIME        500   // refresh rate for checking the glass status in ms
 // state machine constants
@@ -53,34 +57,55 @@
 #define REMOVED     2     // 
 
 // definition of variables
-struct Glass {
-  uint8_t reedPin;      // which pin is the reed switch below this glass connected to
-  bool    glassStatus;  // is this glass on the board or not
-  int     colors[3];    // color of the LED below this glass (R, G, B) -> [0-255]
-};
-struct Glass glass[NUMREEDS];
-Adafruit_NeoPixel strip = Adafruit_NeoPixel(NUMLEDS, LEDData, NEO_GRB + NEO_KHZ800);              // struct for controlling the LEDs
-uint8_t reeds[10]     = {   reedGlass1, reedGlass2, reedGlass3, reedGlass4, reedGlass5,
-                            reedGlass6, reedGlass7, reedGlass8, reedGlass9, reedGlass10};         // array to control the reed input pins
+Glass glass_left[NUMGLASSES];
+Glass glass_right[NUMGLASSES];
+Adafruit_NeoPixel strip_left = Adafruit_NeoPixel(NUMGLASSES, LEDDataLeft, NEO_GRB + NEO_KHZ800);    // object for controlling the LEDs on left side
+Adafruit_NeoPixel strip_right = Adafruit_NeoPixel(NUMGLASSES, LEDDataRight, NEO_GRB + NEO_KHZ800);  // object for controlling the LEDs on right side
 unsigned long previousMillis = 0;   // variable for counter
 int stateVar = INIT; 
 
+MCP23017 mcp_left = MCP23017(MCP_ADDR_LEFT);
+MCP23017 mcp_right = MCP23017(MCP_ADDR_RIGHT);
+
 /* initalize variables */
 void setup() {
-  // initialize variables and reedPins as digital Inputs
-  for(uint8_t i = 0; i < NUMREEDS; i++)
+  // initialize glasses / reedPins
+  colors initColor = {0, 0, 0}; 
+  // uint8_t reedPin = 0;
+  for(uint8_t i = 0; i < NUMGLASSES; i++)
   {
-    glass[i].reedPin = reeds[i];
-    glass[i].glassStatus = false;
-    glass[i].colors[0] = 0;
-    glass[i].colors[1] = 0; 
-    glass[i].colors[2] = 0;   
-    pinMode(glass[i].reedPin, INPUT_PULLUP);
+    if (i < 8) {
+      // set reed pin, port, status as false and color as "off"
+      // reedPin = 0b00000000 | (1 >> (7-i));
+      glass_left[i] = Glass(i, A, false, initColor);
+      glass_right[i] = Glass(i, A, false, initColor);
+    }
+    else {
+      // set reed pin, port, status as false and color as "off"
+      // reedPin = 0b00000000 | (1 >> (15-i));
+      glass_left[i] = Glass((8 - i), B, false, initColor);
+      glass_right[i] = Glass((8 - i), B, false, initColor);
+    }
+      
+    // set all reed pins as input pins
+    pinMode(glass[i].getReedPin(), INPUT_PULLUP);
   }
+  
   // initialize LEDs (also data output pin gets initialized in that step)
   strip.begin();
   strip.show();   // initialize all pixels to "off"
-  Serial.begin(9600);
+
+  // initialize MCPs
+  Wire.begin(); // "start" I2C
+  // left MCP
+  mcp_left.Init();
+  mcp_left.setPortMode(B11111111, A, INPUT_PULLUP); // set A0 - A7 as input with pullup resistor
+  mcp_left.setPortMode(B00000011, B, INPUT_PULLUP); // set B0 - B1 as input with pullup resistor
+  // right MCP
+  mcp_right.Init();
+  mcp_right.setPortMode(B11111111, A, INPUT_PULLUP); // set A0 - A7 as input with pullup resistor
+  mcp_right.setPortMode(B00000011, B, INPUT_PULLUP); // set B0 - B1 as input with pullup resistor
+  Serial.begin(115200);
 }
 
 /* going into main loop */
@@ -90,7 +115,6 @@ void loop() {
   if ((stateVar != INIT) && ((currentMillis - previousMillis) >= WAITTIME))
   {
     Serial.println("Call every 500 ms");
-    Serial.print(digitalRead(glass[0].reedPin));
     previousMillis = currentMillis;
     checkGlasses();
     // checkPattern();
@@ -109,6 +133,7 @@ void loop() {
     case REMOVED:       // glass has been removed
       // go to INIT status, if all glasses have been removed, otherwise go back to LIGHTING
       stateVar = boardEmpty() ? INIT : LIGHTING;
+      // checkPattern();
       Serial.println("Case Removed");
       break;
     default:
@@ -120,38 +145,32 @@ void loop() {
 void initBoard(void)
 {
   int count = 0;
-  for(uint8_t i = 0; i < NUMREEDS; i++)
+  for(uint8_t i = 0; i < NUMGLASSES; i++)
   {
-    if (digitalRead(glass[i].reedPin) == LOW && glass[i].glassStatus == false)
+    if (digitalRead(glass[i].reedPin) == LOW && glass[i].getGlassStatus() == false)
     {
-      glass[i].glassStatus = true;
+      glass[i].getGlassStatus() = true;
       if (i < 3) 
       {
-        glass[i].colors[0] = 0;
-        glass[i].colors[1] = 255;
-        glass[i].colors[2] = 20;
+        glass[i].setColors(0, 255, 20);
         Serial.println("Initialize Glass in green");
       }
       else if (i > 2 && i < 6) 
       {
-        glass[i].colors[0] = 255;
-        glass[i].colors[1] = 255;
-        glass[i].colors[2] = 255;
+        glass[i].setColors(255, 255, 255);
         Serial.println("Initialize Glass in white");
       }
       else if (i > 5) 
       {
-        glass[i].colors[0] = 255;
-        glass[i].colors[1] = 0;
-        glass[i].colors[2] = 0;
+        glass[i].setColors(255, 0, 0);
         Serial.println("Initialize Glass in red");
       }
       turnOn(i);
     }
-    if (glass[i].glassStatus == true) count += 1;
+    if (glass[i].getGlassStatus() == true) count += 1;
   }
   // if all glasses are on the board, go to status LIGHTING
-  if (count == NUMREEDS) stateVar = LIGHTING;
+  if (count == NUMGLASSES) stateVar = LIGHTING;
 }
 
 /* Checks, if all glasses have been removed from the board */
@@ -159,32 +178,32 @@ bool boardEmpty(void)
 {
   bool isEmpty = false;
   int count = 0;
-  for(uint8_t i = 0; i < NUMREEDS; i++)
+  for(uint8_t i = 0; i < NUMGLASSES; i++)
   {
-    if (glass[i].glassStatus == false) count += 1;
+    if (glass[i].getGlassStatus() == false) count += 1;
   }
-  if (count == NUMREEDS) isEmpty = true;
+  if (count == NUMGLASSES) isEmpty = true;
   return isEmpty;
 }
 
 /* Checks status of all glasses (reed switches), sets stateVar to REMOVED, if glass has been removed */
 void checkGlasses(void)
 {
-  for(uint8_t i = 0; i < NUMREEDS; i++)
+  for(uint8_t i = 0; i < NUMGLASSES; i++)
   {
     Serial.print("Glass: ");
     Serial.print(i);
     Serial.println(digitalRead(glass[i].reedPin));
     // Glass wasn't there (false), but is there now (LOW Input) -> turn on again
-    if (digitalRead(glass[i].reedPin) == LOW && glass[i].glassStatus == false)
+    if (digitalRead(glass[i].reedPin) == LOW && glass[i].getGlassStatus() == false)
     {
       glass[i].glassStatus = true;  // put glass onto board
       turnOn(i);
     }
     // Glass was there (true), but got removed (HIGH Input)
-    else if (digitalRead(glass[i].reedPin) == HIGH && glass[i].glassStatus == true)
+    else if (digitalRead(glass[i].reedPin) == HIGH && glass[i].getGlassStatus() == true)
     {
-      glass[i].glassStatus = false;   // remove glass from board
+      glass[i].getGlassStatus() = false;   // remove glass from board
       stateVar = REMOVED; // state machine to switch into REMOVED state
       turnOff(i);
     }
@@ -194,38 +213,36 @@ void checkGlasses(void)
 /* Checks position of glasses (reed switches), sets stateVar accordingly */
 void checkPattern(void)
 {
-  // Raute: 0, 1, 2, 4
-  for(uint8_t i = 0; i < NUMREEDS; i++)
-  {
-    
-  }
-  // Turbopenis: 0, 4, 7 & 8
-  // Vajizzling: 1, 2, 4
-  // Dreieck: 0, 1, 2
+  // DEFAULT: no specific pattern
+  // RAUTE: 0, 1, 2, 4
+  // TURBOPENIS: 0, 4, 7, 8
+  // VAJIZZLING: 1, 2, 4
+  // TRIANGLE: 0, 1, 2
+  // if pattern change -> turn off, change color, turn on
 }
 
-/* turns on glass with given index and given color -> fading in */
+/* turns on glass with given index, color is given by glass object */
 void turnOn(int glassIndex)
 {
   for(int k = 1; k < 101; k++) 
   {
-    int R = int(0.01 * k * glass[glassIndex].colors[0]);
-    int G = int(0.01 * k * glass[glassIndex].colors[1]);
-    int B = int(0.01 * k * glass[glassIndex].colors[2]);
+    int R = int(0.01 * k * glass[glassIndex].getColors().red);
+    int G = int(0.01 * k * glass[glassIndex].getColors().green);
+    int B = int(0.01 * k * glass[glassIndex].getColors().blue);
     strip.setPixelColor(glassIndex, strip.Color(R, G, B));
     strip.show();
     delay(5);
   }
 }
 
-/* turns off glass with given index, saves color as {0,0,0} */
+/* turns off glass with given index, color itself stays the same */
 void turnOff(int glassIndex)
 {
   for(int k = 100; k > -1; k--) 
   {
-    int R = int(0.01 * k * glass[glassIndex].colors[0]);
-    int G = int(0.01 * k * glass[glassIndex].colors[1]);
-    int B = int(0.01 * k * glass[glassIndex].colors[2]);
+    int R = int(0.01 * k * glass[glassIndex].getColors().red);
+    int G = int(0.01 * k * glass[glassIndex].getColors().green);
+    int B = int(0.01 * k * glass[glassIndex].getColors().blue);
     strip.setPixelColor(glassIndex, strip.Color(R, G, B));
     strip.show();
     delay(5);
