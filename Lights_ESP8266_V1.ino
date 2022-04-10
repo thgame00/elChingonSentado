@@ -5,11 +5,11 @@
  * -> LEDs below all glasses to only light up the glasses that are still in the game
  * -> different light modes depending on switch status and glass patterns
  * 
- *    Glass/Switch pattern:
+ *    Glass/Switch pattern from board side:
  *          0
- *        1  2
- *       5  4  3 
- *     6  7  8  9
+ *        2  1
+ *       3  4  5 
+ *     9  8  7  6
  *************************************************************************************************************
  * IMPORTANT: 
  * To reduce NeoPixel burnout risk, add:
@@ -28,8 +28,8 @@
 /* 5 (D1) -> SCL and 4 (D2) -> SDA are reserved as I2C pins */
 #define LEDDataLeft     13  // data output for LEDs on left side of board   (D7 Output on D1 Mini from AzDelivery)
 #define LEDDataRight    15  // data output for LEDs on right side of board  (D8 Output on D1 Mini from AzDelivery)
-#define INTERRUPT_LEFT  14  // interrupt pin for left MCP (D5 Output on D1 Mini from AzDelivery)
-#define INTERRUPT_RIGHT 12  // interrupt pin for right MCP (D6 Output on D1 Mini from AzDelivery)
+//#define INTERRUPT_LEFT  14  // interrupt pin for left MCP (D5 Output on D1 Mini from AzDelivery)
+//#define INTERRUPT_RIGHT 12  // interrupt pin for right MCP (D6 Output on D1 Mini from AzDelivery)
 #define RESET_PIN_LEFT  0 	// reset pin for left MCP23017 (D3 Output on D1 Mini from AzDelivery)
 #define RESET_PIN_RIGHT 2 	// reset pin for left MCP23017 (D4 Output on D1 Mini from AzDelivery)
 
@@ -39,24 +39,26 @@
 #define NUMGLASSES      10    // number of glasses on the board
 #define BRIGHTNESS      50    // set brightness of LEDs
 #define WAITTIME        500   // refresh rate for checking the glass status in ms
-// state machine constants
-#define INIT        0     // stay here until all glasses are on board
-#define LIGHTING    1     // stay in this case as long as init phase is over and at least one glass is still on board
-#define REMOVED     2     // go to this case when at least one glass was removed
+#define LEFT            true
+#define RIGHT           false
 
 // definition of variables
+unsigned long currentMillis = 0;  // counter variable
 Glass glass_left[NUMGLASSES];
 Glass glass_right[NUMGLASSES];
 Adafruit_NeoPixel strip_left = Adafruit_NeoPixel(NUMGLASSES, LEDDataLeft, NEO_GRB + NEO_KHZ800);    // object for controlling the LEDs on left side
 Adafruit_NeoPixel strip_right = Adafruit_NeoPixel(NUMGLASSES, LEDDataRight, NEO_GRB + NEO_KHZ800);  // object for controlling the LEDs on right side
-unsigned long previousMillis = 0;   // variable for counter
-int stateVar = INIT; 
+unsigned long previousMillis = 0;   // counter variable
+enum states { INIT, RUNNING, REMOVED, GAMEOVER };
+states stateVar;
 
 MCP23017 mcp_left = MCP23017(MCP_ADDR_LEFT, RESET_PIN_LEFT);
 MCP23017 mcp_right = MCP23017(MCP_ADDR_RIGHT, RESET_PIN_RIGHT);
 
 /* initalize variables */
 void setup() {
+  // initialize state machine to init state
+  stateVar = INIT;
   // initialize glasses / reedPins
   colors initColor = {0, 0, 0}; 
   // uint8_t reedPin = 0;
@@ -99,30 +101,38 @@ void setup() {
 /* going into main loop */
 void loop() {
   // check reed status every [WAITTIME] seconds, if not in INIT status
-  unsigned long currentMillis = millis(); // return number of milliseconds since start of sketch
+  currentMillis = millis(); // return number of milliseconds since start of sketch
+  bool loser = LEFT;
   if ((stateVar != INIT) && ((currentMillis - previousMillis) >= WAITTIME))
   {
     Serial.println("Call every 500 ms");
     previousMillis = currentMillis;
-    checkGlasses();
+    checkLeftSide();
+    checkRightSide();
     // checkPattern();
   }
   // state machine that controls the lights of the board
   switch (stateVar) 
   {
     case INIT:          // glass status of all glasses is false, wait until all glasses are on the board
-      Serial.println("Case Init");
+      Serial.println("Case INIT");
       initBoard();
       break;
-    case LIGHTING:      // LEDs are enlightened, no glass removed
+    case RUNNING:      // LEDs are enlightened, no glass removed
       // default status
-      Serial.println("Case Lighting");
+      Serial.println("Case RUNNING");
       break;
     case REMOVED:       // glass has been removed
-      // go to INIT status, if all glasses have been removed, otherwise go back to LIGHTING
-      stateVar = boardEmpty() ? INIT : LIGHTING;
+      // go to INIT status, if all glasses have been removed, otherwise go back to RUNNING
+      stateVar = boardEmpty(&loser) ? GAMEOVER : RUNNING;
       // checkPattern();
-      Serial.println("Case Removed");
+      Serial.println("Case REMOVED");
+      break;
+      case GAMEOVER:
+      /* check which side won -> loser saved in "loser" variable: 
+        - let glasses of loser, which are still on board, blink red 
+        - all LEDs on winner side blink green or so 
+        - after waiting time of ?20 seconds?, switch to INIT mode */
       break;
     default:
       break;
@@ -136,9 +146,9 @@ void initBoard(void)
   for(uint8_t i = 0; i < NUMGLASSES; i++)
   {
     /* init left side */
-    if (mcp_left.getPin(glass_left[i].getReedPin(), glass_left[i].getPort()) == LOW && glass_left[i].getGlassStatus() == false)
+    if (mcp_left.getPin(glass_left[i].getReedPin(), glass_left[i].getPort()) == true && glass_left[i].getGlassStatus() == false)
     {
-      glass_left[i].getGlassStatus() = true;
+      glass_left[i].setGlassStatus(true);
       if (i < 3) 
       {
         glass_left[i].setColors(0, 255, 20);
@@ -154,12 +164,12 @@ void initBoard(void)
         glass_left[i].setColors(255, 0, 0);
         Serial.println("Initialize Glass in red");
       }
-      turnOn(i);
+      turnOn(i, LEFT);
     }
     /* init right side */
-    if (mcp_right.getPin(glass_right[i].getReedPin(), glass_right[i].getPort()) == LOW && glass_right[i].getGlassStatus() == false)
+    if (mcp_right.getPin(glass_right[i].getReedPin(), glass_right[i].getPort()) == true && glass_right[i].getGlassStatus() == false)
     {
-      glass_right[i].getGlassStatus() = true;
+      glass_right[i].setGlassStatus(true);
       if (i < 3) 
       {
         glass_right[i].setColors(0, 255, 20);
@@ -175,48 +185,80 @@ void initBoard(void)
         glass_right[i].setColors(255, 0, 0);
         Serial.println("Initialize Glass in red");
       }
-      turnOn(i);
+      turnOn(i, RIGHT);
     }
     if (glass_left[i].getGlassStatus() == true) count += 1;
     if (glass_right[i].getGlassStatus() == true) count += 1;
   }
-  // if all glasses are on the board, go to status LIGHTING
-  if (count == 2*NUMGLASSES) stateVar = LIGHTING;
+  // if all glasses are on the board, go to status RUNNING
+  if (count == 2*NUMGLASSES) stateVar = RUNNING;
 }
 
-/* Checks, if all glasses have been removed from the board */
-bool boardEmpty(void)
+/* Checks, if all glasses of one side have been removed from the board -> game over */
+bool boardEmpty(bool *loser)
 {
   bool isEmpty = false;
-  int count = 0;
+  int countLeft, countRight = 0;
   for(uint8_t i = 0; i < NUMGLASSES; i++)
   {
-    if (glass[i].getGlassStatus() == false) count += 1;
+    if (glass_left[i].getGlassStatus() == false) countLeft += 1;
+    if (glass_right[i].getGlassStatus() == false) countRight += 1;
   }
-  if (count == NUMGLASSES) isEmpty = true;
+  if (countLeft == NUMGLASSES) 
+  {
+    isEmpty = true;
+    *loser = LEFT;
+  }
+  else if (countRight == NUMGLASSES)
+  {
+    isEmpty = true;
+    *loser = RIGHT;
+  }
   return isEmpty;
 }
 
-/* Checks status of all glasses (reed switches), sets stateVar to REMOVED, if glass has been removed */
-void checkGlasses(void)
+/* Checks status of all glasses on left side (reed switches), sets stateVar to REMOVED, if glass has been removed */
+void checkLeftSide(void)
 {
   for(uint8_t i = 0; i < NUMGLASSES; i++)
   {
-    Serial.print("Glass: ");
+    Serial.print("Left side, Glass: ");
     Serial.print(i);
-    Serial.println(digitalRead(glass[i].reedPin));
-    // Glass wasn't there (false), but is there now (LOW Input) -> turn on again
-    if (digitalRead(glass[i].reedPin) == LOW && glass[i].getGlassStatus() == false)
+    // Glass wasn't there (false), but is there now (true Input) -> turn on again
+    if (mcp_left.getPin(glass_left[i].getReedPin(), glass_left[i].getPort()) == true && glass_left[i].getGlassStatus() == false)
     {
-      glass[i].glassStatus = true;  // put glass onto board
-      turnOn(i);
+      glass_left[i].setGlassStatus(true);  // put glass onto board
+      turnOn(i, LEFT);
     }
-    // Glass was there (true), but got removed (HIGH Input)
-    else if (digitalRead(glass[i].reedPin) == HIGH && glass[i].getGlassStatus() == true)
+    // Glass was there (true), but got removed (false Input)
+    else if (mcp_left.getPin(glass_left[i].getReedPin(), glass_left[i].getPort()) == false && glass_left[i].getGlassStatus() == true)
     {
-      glass[i].getGlassStatus() = false;   // remove glass from board
+      glass_left[i].setGlassStatus(false);   // remove glass from board
       stateVar = REMOVED; // state machine to switch into REMOVED state
-      turnOff(i);
+      turnOff(i, LEFT);
+    }
+  }
+}
+
+/* Checks status of all glasses on right side (reed switches), sets stateVar to REMOVED, if glass has been removed */
+void checkRightSide(void)
+{
+  for(uint8_t i = 0; i < NUMGLASSES; i++)
+  {
+    Serial.print("Right side, Glass: ");
+    Serial.print(i);
+    // Glass wasn't there (false), but is there now (LOW Input) -> turn on again
+    if (mcp_right.getPin(glass_right[i].getReedPin(), glass_right[i].getPort()) == true && glass_right[i].getGlassStatus() == false)
+    {
+      glass_right[i].setGlassStatus(true);  // put glass onto board
+      turnOn(i, RIGHT);
+    }
+    // Glass was there (true), but got removed (false Input)
+    else if (mcp_right.getPin(glass_right[i].getReedPin(), glass_right[i].getPort()) == false && glass_right[i].getGlassStatus() == true)
+    {
+      glass_right[i].setGlassStatus(false);   // remove glass from board
+      stateVar = REMOVED; // state machine to switch into REMOVED state
+      turnOff(i, RIGHT);
     }
   }
 }
@@ -232,30 +274,60 @@ void checkPattern(void)
   // if pattern change -> turn off, change color, turn on
 }
 
-/* turns on glass with given index, color is given by glass object */
-void turnOn(int glassIndex)
+/* turns on glass with given index, color is given by glass object [if left is true, index is for left side, else for right side] */
+void turnOn(int glassIndex, bool left)
 {
-  for(int k = 1; k < 101; k++) 
+  if (left)
   {
-    int R = int(0.01 * k * glass[glassIndex].getColors().red);
-    int G = int(0.01 * k * glass[glassIndex].getColors().green);
-    int B = int(0.01 * k * glass[glassIndex].getColors().blue);
-    strip_left.setPixelColor(glassIndex, strip_left.Color(R, G, B));
-    strip_left.show();
-    delay(5); // control duration of fading effect
+    for(int k = 1; k < 101; k++) 
+    {
+      int R = int(0.01 * k * glass_left[glassIndex].getColors().red);
+      int G = int(0.01 * k * glass_left[glassIndex].getColors().green);
+      int B = int(0.01 * k * glass_left[glassIndex].getColors().blue);
+      strip_left.setPixelColor(glassIndex, strip_left.Color(R, G, B));
+      strip_left.show();
+      delay(5); // control duration of fading effect
+    }
   }
+  else
+  {
+    for(int k = 1; k < 101; k++) 
+    {
+      int R = int(0.01 * k * glass_right[glassIndex].getColors().red);
+      int G = int(0.01 * k * glass_right[glassIndex].getColors().green);
+      int B = int(0.01 * k * glass_right[glassIndex].getColors().blue);
+      strip_right.setPixelColor(glassIndex, strip_right.Color(R, G, B));
+      strip_right.show();
+      delay(5); // control duration of fading effect
+    }
+  }  
 }
 
-/* turns off glass with given index, color itself stays the same */
-void turnOff(int glassIndex)
+/* turns off glass with given index, color itself stays the same [if left is true, index is for left side, else for right side] */
+void turnOff(int glassIndex, bool left)
 {
-  for(int k = 100; k > -1; k--) 
+  if (left)
   {
-    int R = int(0.01 * k * glass[glassIndex].getColors().red);
-    int G = int(0.01 * k * glass[glassIndex].getColors().green);
-    int B = int(0.01 * k * glass[glassIndex].getColors().blue);
-    strip_left.setPixelColor(glassIndex, strip_left.Color(R, G, B));
-    strip_left.show();
-    delay(5); // control duration of fading effect
+    for(int k = 100; k > -1; k--) 
+    {
+      int R = int(0.01 * k * glass_left[glassIndex].getColors().red);
+      int G = int(0.01 * k * glass_left[glassIndex].getColors().green);
+      int B = int(0.01 * k * glass_left[glassIndex].getColors().blue);
+      strip_left.setPixelColor(glassIndex, strip_left.Color(R, G, B));
+      strip_left.show();
+      delay(5); // control duration of fading effect
+    }
   }
+  else
+  {
+    for(int k = 100; k > -1; k--) 
+    {
+      int R = int(0.01 * k * glass_right[glassIndex].getColors().red);
+      int G = int(0.01 * k * glass_right[glassIndex].getColors().green);
+      int B = int(0.01 * k * glass_right[glassIndex].getColors().blue);
+      strip_right.setPixelColor(glassIndex, strip_right.Color(R, G, B));
+      strip_right.show();
+      delay(5); // control duration of fading effect
+    }
+  }  
 }

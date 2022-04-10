@@ -7,7 +7,17 @@
 
 #include "glasses.h"
 
-Glass::Glass(uint8_t reedPin, uint8_t port, bool glassStatus, colors colors)
+Glass::Glass()
+{
+    _reedPin        = 0;
+    _port           = A;
+    _glassStatus    = false;
+    _colors.red     = 0;
+    _colors.green   = 0;
+    _colors.blue    = 0;
+}
+
+Glass::Glass(uint8_t reedPin, MCP_PORT port, bool glassStatus, colors colors)
 {
     _reedPin        = reedPin;
     _port           = port;
